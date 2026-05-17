@@ -85,3 +85,26 @@ struct CallStatusResponse: Codable {
     let success: Bool?
     let transcript: String?
 }
+
+// MARK: - Conversation History
+struct ConversationItem: Identifiable {
+    let id: UUID
+    let query: String
+    let timestamp: Date
+    var guideResponse: GuideResponse?
+    var actionResponse: ActionResponse?
+    var callStatus: CallStatusResponse?
+    var isLoading: Bool
+    var errorMessage: String?
+    
+    init(query: String) {
+        self.id = UUID()
+        self.query = query
+        self.timestamp = Date()
+        self.guideResponse = nil
+        self.actionResponse = nil
+        self.callStatus = nil
+        self.isLoading = true
+        self.errorMessage = nil
+    }
+}

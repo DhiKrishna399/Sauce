@@ -20,7 +20,7 @@ struct GuideModeView: View {
                             Circle()
                                 .fill(
                                     LinearGradient(
-                                        colors: [.blue.opacity(0.8), .purple.opacity(0.8)],
+                                        colors: [.red.opacity(0.8), .orange.opacity(0.8)],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     )
@@ -42,7 +42,7 @@ struct GuideModeView: View {
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                            .stroke(Color.red.opacity(0.6), lineWidth: 2)
                     )
                 }
                 

@@ -7,18 +7,15 @@ import SwiftUI
 import AppKit
 
 struct MainWindowView: View {
-    @State private var response: GuideResponse?
-    @State private var actionResponse: ActionResponse?
-    @State private var callStatus: CallStatusResponse?
-    @State private var currentQuery: String?
+    @State private var conversationHistory: [ConversationItem] = []
+    @State private var currentItemId: UUID?
     @State private var queryText: String = ""
     @State private var isLoading = false
     @State private var isPollingCall = false
     @State private var showHighlights = false
-    @State private var errorMessage: String?
     @State private var backendConnected = false
-    @State private var currentMode: String = "guide"
     @State private var pollingTask: Task<Void, Never>?
+    @State private var scrollTrigger: Int = 0
     
     let apiClient = APIClient()
     
@@ -141,18 +138,10 @@ struct MainWindowView: View {
     // MARK: - Results Section
     private var resultsSection: some View {
         VStack(spacing: 0) {
-            if let errorMessage = errorMessage {
-                errorView(message: errorMessage)
-            } else if isLoading {
-                loadingView
-            } else if let callStatus = callStatus {
-                callStatusView(status: callStatus)
-            } else if let actionResponse = actionResponse {
-                actionResultView(response: actionResponse)
-            } else if let response = response {
-                GuideModeView(response: response, query: currentQuery, showHighlights: $showHighlights)
-            } else {
+            if conversationHistory.isEmpty {
                 emptyStateView
+            } else {
+                conversationHistoryView
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -164,6 +153,48 @@ struct MainWindowView: View {
         )
         .padding(.horizontal, 12)
         .padding(.bottom, 12)
+    }
+    
+    // MARK: - Conversation History View
+    private var conversationHistoryView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    ForEach(conversationHistory) { item in
+                        ConversationItemView(
+                            item: item,
+                            isPollingCall: isPollingCall && item.id == currentItemId,
+                            showHighlights: $showHighlights,
+                            statusColors: statusColors,
+                            statusIcon: statusIcon
+                        )
+                        .id(item.id)
+                    }
+                }
+                .padding(14)
+            }
+            .onChange(of: conversationHistory.count) { _ in
+                if let lastItem = conversationHistory.last {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        proxy.scrollTo(lastItem.id, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: currentItemId) { newId in
+                if let id = newId {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: scrollTrigger) { _ in
+                if let lastItem = conversationHistory.last {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        proxy.scrollTo(lastItem.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
     }
     
     // MARK: - Call Status View
@@ -411,54 +442,6 @@ struct MainWindowView: View {
     }
     
     // MARK: - State Views
-    private func errorView(message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 28))
-                .foregroundColor(.orange)
-            
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Button("Dismiss") {
-                withAnimation(.spring(response: 0.3)) {
-                    self.errorMessage = nil
-                }
-            }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundColor(.blue)
-        }
-        .padding()
-    }
-    
-    private var loadingView: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .stroke(Color.purple.opacity(0.2), lineWidth: 3)
-                    .frame(width: 40, height: 40)
-                
-                Circle()
-                    .trim(from: 0, to: 0.7)
-                    .stroke(
-                        LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing),
-                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                    )
-                    .frame(width: 40, height: 40)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isLoading)
-            }
-            
-            Text("Analyzing your screen...")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.secondary)
-        }
-        .padding()
-    }
-    
     private var emptyStateView: some View {
         VStack(spacing: 12) {
             Image(systemName: "sparkle.magnifyingglass")
@@ -495,10 +478,29 @@ struct MainWindowView: View {
     }
     
     private func handleQuery(_ query: String) async {
+        // Create a new conversation item
+        let newItem = ConversationItem(query: query)
+        let itemId = newItem.id
+        
+        await MainActor.run {
+            withAnimation(.spring(response: 0.3)) {
+                conversationHistory.append(newItem)
+                currentItemId = itemId
+                isLoading = true
+            }
+        }
+        
         // Capture screenshot at submission time
         guard let imageBase64 = await captureScreenshotAtSubmissionTime() else {
             await MainActor.run {
-                withAnimation { self.errorMessage = "Failed to capture screenshot" }
+                withAnimation {
+                    if let index = conversationHistory.firstIndex(where: { $0.id == itemId }) {
+                        conversationHistory[index].isLoading = false
+                        conversationHistory[index].errorMessage = "Failed to capture screenshot"
+                    }
+                    isLoading = false
+                    scrollTrigger += 1
+                }
             }
             return
         }
@@ -509,31 +511,6 @@ struct MainWindowView: View {
         // Cancel any existing polling
         pollingTask?.cancel()
         
-        await MainActor.run {
-            withAnimation(.spring(response: 0.3)) {
-                isLoading = true
-                errorMessage = nil
-                currentQuery = query
-                currentMode = mode
-                isPollingCall = false
-                callStatus = nil
-                // Clear previous responses
-                if mode == "action" {
-                    self.response = nil
-                } else {
-                    self.actionResponse = nil
-                }
-            }
-        }
-        
-        defer {
-            DispatchQueue.main.async {
-                withAnimation(.spring(response: 0.3)) {
-                    self.isLoading = false
-                }
-            }
-        }
-        
         do {
             if mode == "action" {
                 let actionResult = try await apiClient.analyzeAction(
@@ -542,14 +519,18 @@ struct MainWindowView: View {
                 )
                 await MainActor.run {
                     withAnimation(.spring(response: 0.4)) {
-                        self.actionResponse = actionResult
-                        self.callStatus = nil
+                        if let index = conversationHistory.firstIndex(where: { $0.id == itemId }) {
+                            conversationHistory[index].actionResponse = actionResult
+                            conversationHistory[index].isLoading = false
+                        }
+                        isLoading = false
+                        scrollTrigger += 1
                     }
                 }
                 
                 // Start polling if we have a callId
                 if let callId = actionResult.callId {
-                    startPollingCallStatus(callId: callId)
+                    startPollingCallStatus(callId: callId, itemId: itemId)
                 }
             } else {
                 let response = try await apiClient.analyze(
@@ -559,20 +540,30 @@ struct MainWindowView: View {
                 )
                 await MainActor.run {
                     withAnimation(.spring(response: 0.4)) {
-                        self.response = response
+                        if let index = conversationHistory.firstIndex(where: { $0.id == itemId }) {
+                            conversationHistory[index].guideResponse = response
+                            conversationHistory[index].isLoading = false
+                        }
+                        isLoading = false
+                        scrollTrigger += 1
                     }
                 }
             }
         } catch {
             await MainActor.run {
                 withAnimation {
-                    self.errorMessage = error.localizedDescription
+                    if let index = conversationHistory.firstIndex(where: { $0.id == itemId }) {
+                        conversationHistory[index].errorMessage = error.localizedDescription
+                        conversationHistory[index].isLoading = false
+                    }
+                    isLoading = false
+                    scrollTrigger += 1
                 }
             }
         }
     }
     
-    private func startPollingCallStatus(callId: String) {
+    private func startPollingCallStatus(callId: String, itemId: UUID) {
         // Cancel any existing polling
         pollingTask?.cancel()
         
@@ -590,8 +581,11 @@ struct MainWindowView: View {
                     
                     await MainActor.run {
                         withAnimation(.spring(response: 0.3)) {
-                            self.callStatus = status
-                            self.actionResponse = nil // Clear action response, show status instead
+                            if let index = conversationHistory.firstIndex(where: { $0.id == itemId }) {
+                                conversationHistory[index].callStatus = status
+                                conversationHistory[index].actionResponse = nil
+                            }
+                            scrollTrigger += 1
                         }
                     }
                     
@@ -681,6 +675,290 @@ struct MainWindowView: View {
         }
     }
     
+}
+
+// MARK: - Conversation Item View
+struct ConversationItemView: View {
+    let item: ConversationItem
+    let isPollingCall: Bool
+    @Binding var showHighlights: Bool
+    let statusColors: (CallStatusResponse) -> [Color]
+    let statusIcon: (CallStatusResponse) -> String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Question bubble with red border
+            questionBubble
+            
+            // Response content
+            if item.isLoading {
+                loadingIndicator
+            } else if let error = item.errorMessage {
+                errorBubble(message: error)
+            } else if let callStatus = item.callStatus {
+                callStatusBubble(status: callStatus)
+            } else if let actionResponse = item.actionResponse {
+                actionResponseBubble(response: actionResponse)
+            } else if let guideResponse = item.guideResponse {
+                guideResponseBubble(response: guideResponse)
+            }
+        }
+    }
+    
+    private var questionBubble: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.red.opacity(0.8), .orange.opacity(0.8)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 28, height: 28)
+                
+                Text("Q")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            
+            Text(item.query)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.primary.opacity(0.9))
+                .lineSpacing(3)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.red.opacity(0.6), lineWidth: 2)
+        )
+    }
+    
+    private var loadingIndicator: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .scaleEffect(0.7)
+            Text("Analyzing your screen...")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+    
+    private func errorBubble(message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+    
+    private func guideResponseBubble(response: GuideResponse) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: response.isHowTo ? "list.bullet.clipboard" : "lightbulb.min")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: response.isHowTo ? [.orange, .yellow] : [.yellow, .orange],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                
+                Text(response.isHowTo ? "Instructions" : "Answer")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
+            
+            Text(response.explanation)
+                .font(.system(size: 13))
+                .foregroundColor(.primary.opacity(0.85))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+            
+            if response.isHowTo && !response.steps.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(response.steps) { step in
+                        StepRowCompact(step: step, totalSteps: response.steps.count)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
+        )
+    }
+    
+    private func actionResponseBubble(response: ActionResponse) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: response.status == "success" ?
+                                    (response.isEmailAction ? [.blue, .cyan] : [.green, .mint]) :
+                                    [.orange, .yellow],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 36, height: 36)
+                    
+                    Image(systemName: response.isEmailAction ? "envelope.fill" :
+                          (response.type == "executed" ? "phone.arrow.up.right.fill" : "phone.fill"))
+                        .font(.system(size: 16))
+                        .foregroundColor(.white)
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(response.message ?? "Processing...")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                    
+                    if response.type == "executed" {
+                        Text(response.isEmailAction ? "Email sent" : "Call initiated")
+                            .font(.system(size: 11))
+                            .foregroundColor(.green)
+                    }
+                }
+                
+                Spacer()
+            }
+            
+            if response.isEmailAction, let details = response.details {
+                if let subject = details.subject {
+                    HStack(spacing: 6) {
+                        Text("Subject:")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        Text(subject)
+                            .font(.system(size: 11))
+                            .foregroundColor(.primary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+    
+    private func callStatusBubble(status: CallStatusResponse) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: statusColors(status),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 36, height: 36)
+                    
+                    Image(systemName: statusIcon(status))
+                        .font(.system(size: 16))
+                        .foregroundColor(.white)
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.status.uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(statusColors(status).first ?? .gray)
+                    
+                    Text(status.message)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                }
+                
+                Spacer()
+                
+                if isPollingCall {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                }
+            }
+            
+            if let success = status.success {
+                HStack(spacing: 6) {
+                    Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundColor(success ? .green : .red)
+                    Text(success ? "Completed successfully" : "Did not complete")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(success ? .green : .red)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            
+            if let transcript = status.transcript, !transcript.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Transcript")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                    Text(transcript)
+                        .font(.system(size: 11))
+                        .foregroundColor(.primary.opacity(0.8))
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Compact Step Row for History
+struct StepRowCompact: View {
+    let step: GuideStep
+    let totalSteps: Int
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(step.step)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .frame(width: 20, height: 20)
+                .background(
+                    Circle()
+                        .fill(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
+                )
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(step.instruction)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary.opacity(0.9))
+                
+                if !step.elementDescription.isEmpty {
+                    Text(step.elementDescription)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
 }
 
 #Preview {
