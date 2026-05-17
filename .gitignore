@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+*.xcuserstate
+xcuserdata/
+
+# Build artifacts
+dist/
+build/
+*.xcworkspace/xcuserdata/
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
