@@ -65,3 +65,107 @@ export interface ActionExecutionResponse {
   callId?: string;
   confirmationNumber?: string;
 }
+
+// AgentPhone Types
+export interface AgentPhoneConfig {
+  apiKey: string;
+  agentId?: string;
+  mockMode: boolean;
+}
+
+export interface CreateAgentRequest {
+  name: string;
+  description?: string;
+  voiceMode: 'webhook' | 'hosted';
+  systemPrompt?: string;
+  beginMessage?: string;
+  voice?: string;
+  modelTier?: 'turbo' | 'balanced' | 'max';
+}
+
+export interface AgentPhoneAgent {
+  id: string;
+  name: string;
+  voiceMode: 'webhook' | 'hosted';
+  systemPrompt?: string;
+  voice: string;
+  createdAt: string;
+  numbers?: { id: string; phoneNumber: string; status: string }[];
+}
+
+export interface CreateCallRequest {
+  agentId: string;
+  toNumber: string;
+  initialGreeting?: string;
+  systemPrompt?: string;
+  variables?: Record<string, string>;
+}
+
+export interface AgentPhoneCall {
+  id: string;
+  agentId: string;
+  toNumber: string;
+  fromNumber?: string;
+  status: 'queued' | 'ringing' | 'in-progress' | 'completed' | 'failed' | 'no-answer';
+  direction: 'inbound' | 'outbound' | 'web';
+  startedAt?: string;
+  endedAt?: string;
+  durationSeconds?: number;
+}
+
+export interface CallTranscript {
+  role: 'user' | 'agent';
+  content: string;
+  createdAt: string;
+}
+
+export interface WebhookEvent {
+  event: 'agent.message' | 'agent.call_ended';
+  callId: string;
+  agentId: string;
+  data: {
+    transcript?: string;
+    status?: string;
+    durationSeconds?: number;
+    transcripts?: CallTranscript[];
+  };
+}
+
+// Reservation-specific types
+export interface ReservationIntent {
+  restaurantName: string;
+  phoneNumber: string;
+  partySize: number;
+  date: string;
+  time: string;
+  guestName: string;
+  specialRequests?: string;
+}
+
+export interface ExtractedBusinessInfo {
+  businessName: string;
+  phoneNumber: string | null;
+  address?: string;
+  hours?: string;
+  cuisine?: string;
+  priceRange?: string;
+}
+
+export interface ParsedUserIntent {
+  action: 'reservation' | 'inquiry' | 'personal_call' | 'unknown';
+  partySize?: number;
+  date?: string;
+  time?: string;
+  guestName?: string;
+  specialRequests?: string;
+  rawQuery: string;
+}
+
+// Personal call/message types
+export interface PersonalMessageIntent {
+  phoneNumber: string;
+  recipientName?: string;
+  message: string;
+  isUrgent: boolean;
+  senderName: string;
+}

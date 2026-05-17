@@ -8,12 +8,17 @@ import AppKit
 
 struct MainWindowView: View {
     @State private var response: GuideResponse?
+    @State private var actionResponse: ActionResponse?
+    @State private var callStatus: CallStatusResponse?
     @State private var currentQuery: String?
     @State private var queryText: String = ""
     @State private var isLoading = false
+    @State private var isPollingCall = false
     @State private var showHighlights = false
     @State private var errorMessage: String?
     @State private var backendConnected = false
+    @State private var currentMode: String = "guide"
+    @State private var pollingTask: Task<Void, Never>?
     
     let apiClient = APIClient()
     
@@ -140,6 +145,10 @@ struct MainWindowView: View {
                 errorView(message: errorMessage)
             } else if isLoading {
                 loadingView
+            } else if let callStatus = callStatus {
+                callStatusView(status: callStatus)
+            } else if let actionResponse = actionResponse {
+                actionResultView(response: actionResponse)
             } else if let response = response {
                 GuideModeView(response: response, query: currentQuery, showHighlights: $showHighlights)
             } else {
@@ -155,6 +164,197 @@ struct MainWindowView: View {
         )
         .padding(.horizontal, 12)
         .padding(.bottom, 12)
+    }
+    
+    // MARK: - Call Status View
+    private func callStatusView(status: CallStatusResponse) -> some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                // Status Icon
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: statusColors(for: status),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 70, height: 70)
+                    
+                    Image(systemName: statusIcon(for: status))
+                        .font(.system(size: 30))
+                        .foregroundColor(.white)
+                }
+                .shadow(color: statusColors(for: status).first?.opacity(0.4) ?? .clear, radius: 10)
+                
+                // Status Badge
+                Text(status.status.uppercased())
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(statusColors(for: status).first ?? .gray, in: Capsule())
+                
+                // Message
+                Text(status.message)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                // Success/Failure indicator
+                if let success = status.success {
+                    HStack(spacing: 8) {
+                        Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(success ? .green : .red)
+                        Text(success ? "Completed successfully" : "Did not complete")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(success ? .green : .red)
+                    }
+                    .padding(.top, 4)
+                }
+                
+                // Transcript
+                if let transcript = status.transcript, !transcript.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "text.quote")
+                                .foregroundColor(.secondary)
+                            Text("Call Transcript")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Text(transcript)
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary.opacity(0.8))
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                }
+                
+                // Polling indicator
+                if isPollingCall {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Updating...")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 8)
+                }
+            }
+            .padding(.vertical, 20)
+        }
+    }
+    
+    private func statusColors(for status: CallStatusResponse) -> [Color] {
+        switch status.status {
+        case "completed":
+            return status.success == true ? [.green, .mint] : [.orange, .yellow]
+        case "in-progress":
+            return [.blue, .cyan]
+        case "ringing":
+            return [.purple, .pink]
+        case "queued":
+            return [.gray, .secondary]
+        case "failed", "no-answer":
+            return [.red, .orange]
+        default:
+            return [.gray, .secondary]
+        }
+    }
+    
+    private func statusIcon(for status: CallStatusResponse) -> String {
+        switch status.status {
+        case "completed":
+            return status.success == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+        case "in-progress":
+            return "phone.fill"
+        case "ringing":
+            return "phone.arrow.up.right.fill"
+        case "queued":
+            return "phone.badge.clock.fill"
+        case "failed":
+            return "phone.down.fill"
+        case "no-answer":
+            return "phone.fill.badge.xmark"
+        default:
+            return "phone.fill"
+        }
+    }
+    
+    // MARK: - Action Result View
+    private func actionResultView(response: ActionResponse) -> some View {
+        VStack(spacing: 16) {
+            // Icon based on status
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: response.status == "success" ? [.green, .mint] : [.orange, .yellow],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 60, height: 60)
+                
+                Image(systemName: response.type == "executed" ? "phone.arrow.up.right.fill" : "phone.fill")
+                    .font(.system(size: 26))
+                    .foregroundColor(.white)
+            }
+            .shadow(color: response.status == "success" ? .green.opacity(0.4) : .orange.opacity(0.4), radius: 10)
+            
+            // Message
+            Text(response.message ?? "Processing...")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.primary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            // Call ID if available
+            if let callId = response.callId {
+                HStack(spacing: 6) {
+                    Image(systemName: "number.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    Text("Call ID: \(callId)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            
+            // Status indicator
+            if response.type == "executed" {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                    Text("Call initiated")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.green)
+                }
+                .padding(.top, 8)
+            } else if response.type == "error" {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("Action failed")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.orange)
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 24)
     }
     
     // MARK: - State Views
@@ -250,11 +450,26 @@ struct MainWindowView: View {
             return
         }
         
+        // Detect if this is an action request
+        let mode = detectMode(for: query)
+        
+        // Cancel any existing polling
+        pollingTask?.cancel()
+        
         await MainActor.run {
             withAnimation(.spring(response: 0.3)) {
                 isLoading = true
                 errorMessage = nil
                 currentQuery = query
+                currentMode = mode
+                isPollingCall = false
+                callStatus = nil
+                // Clear previous responses
+                if mode == "action" {
+                    self.response = nil
+                } else {
+                    self.actionResponse = nil
+                }
             }
         }
         
@@ -267,14 +482,32 @@ struct MainWindowView: View {
         }
         
         do {
-            let response = try await apiClient.analyze(
-                imageBase64: imageBase64,
-                query: query,
-                mode: "guide"
-            )
-            await MainActor.run {
-                withAnimation(.spring(response: 0.4)) {
-                    self.response = response
+            if mode == "action" {
+                let actionResult = try await apiClient.analyzeAction(
+                    imageBase64: imageBase64,
+                    query: query
+                )
+                await MainActor.run {
+                    withAnimation(.spring(response: 0.4)) {
+                        self.actionResponse = actionResult
+                        self.callStatus = nil
+                    }
+                }
+                
+                // Start polling if we have a callId
+                if let callId = actionResult.callId {
+                    startPollingCallStatus(callId: callId)
+                }
+            } else {
+                let response = try await apiClient.analyze(
+                    imageBase64: imageBase64,
+                    query: query,
+                    mode: "guide"
+                )
+                await MainActor.run {
+                    withAnimation(.spring(response: 0.4)) {
+                        self.response = response
+                    }
                 }
             }
         } catch {
@@ -284,6 +517,74 @@ struct MainWindowView: View {
                 }
             }
         }
+    }
+    
+    private func startPollingCallStatus(callId: String) {
+        // Cancel any existing polling
+        pollingTask?.cancel()
+        
+        pollingTask = Task {
+            await MainActor.run {
+                isPollingCall = true
+            }
+            
+            var attempts = 0
+            let maxAttempts = 60 // Poll for up to 2 minutes (2s intervals)
+            
+            while !Task.isCancelled && attempts < maxAttempts {
+                do {
+                    let status = try await apiClient.getCallStatus(callId: callId)
+                    
+                    await MainActor.run {
+                        withAnimation(.spring(response: 0.3)) {
+                            self.callStatus = status
+                            self.actionResponse = nil // Clear action response, show status instead
+                        }
+                    }
+                    
+                    // Stop polling if call is complete
+                    if status.status == "completed" || status.status == "failed" || status.status == "no-answer" {
+                        break
+                    }
+                } catch {
+                    // Silently continue polling on error
+                }
+                
+                attempts += 1
+                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            }
+            
+            await MainActor.run {
+                isPollingCall = false
+            }
+        }
+    }
+    
+    private func detectMode(for query: String) -> String {
+        let lowercased = query.lowercased()
+        
+        // Check for phone numbers in query (personal calls)
+        let phonePattern = #"\+?1?\d{10,11}|\(\d{3}\)\s?\d{3}[-.]?\d{4}|\d{3}[-.]?\d{3}[-.]?\d{4}"#
+        if let _ = lowercased.range(of: phonePattern, options: .regularExpression) {
+            return "action"
+        }
+        
+        let actionKeywords = [
+            "call", "phone", "dial",
+            "book", "reserve", "reservation", "make a reservation",
+            "schedule", "appointment",
+            "order", "purchase", "buy",
+            "tell them", "tell her", "tell him",
+            "leave a message", "send a message", "let them know",
+            "remind", "notify", "inform"
+        ]
+        
+        for keyword in actionKeywords {
+            if lowercased.contains(keyword) {
+                return "action"
+            }
+        }
+        return "guide"
     }
     
     private func captureScreenshotAtSubmissionTime() async -> String? {
