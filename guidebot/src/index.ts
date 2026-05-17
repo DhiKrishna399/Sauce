@@ -129,7 +129,7 @@ app.use((req: Request, res: Response) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info("=".repeat(50));
-  logger.info("GuideBot backend starting up");
+  logger.info("Sauce backend starting up");
   logger.info(`Server listening on http://localhost:${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || "development"}`);
   logger.info(`API Key configured: ${process.env.GEMINI_API_KEY ? "Yes" : "NO - MISSING!"}`);

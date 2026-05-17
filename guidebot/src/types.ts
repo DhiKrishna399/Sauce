@@ -1,4 +1,4 @@
-// Request and Response types for GuideBot API
+// Request and Response types for Sauce API
 
 export interface AnalyzeRequest {
   imageBase64: string;

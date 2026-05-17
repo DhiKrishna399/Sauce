@@ -5,60 +5,88 @@
 
 import AppKit
 import Foundation
+import ScreenCaptureKit
 
 class ScreenCaptureManager {
     
-    /// Captures screen after hiding all app windows to avoid including the GuideBot UI
+    /// Captures screen while excluding our app's windows (no flashing)
     static func captureScreenWithoutAppWindows(completion: @escaping (NSImage?) -> Void) {
-        // Store references to visible windows and their original states
-        let appWindows = NSApp.windows.filter { $0.isVisible }
-        
-        // Hide all app windows
-        for window in appWindows {
-            window.orderOut(nil)
-        }
-        
-        // Wait a moment for windows to fully hide, then capture
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            let screenshot = captureScreenInternal()
-            
-            // Restore windows
-            for window in appWindows {
-                window.orderFront(nil)
+        Task {
+            do {
+                let image = try await captureExcludingOurWindows()
+                await MainActor.run {
+                    completion(image)
+                }
+            } catch {
+                print("Screenshot failed: \(error)")
+                await MainActor.run {
+                    completion(nil)
+                }
             }
-            
-            // Re-activate the app so the window comes back to focus
-            NSApp.activate(ignoringOtherApps: true)
-            
-            completion(screenshot)
         }
     }
     
-    /// Internal capture method - does the actual screenshot
-    private static func captureScreenInternal() -> NSImage? {
-        let task = Process()
-        task.launchPath = "/usr/sbin/screencapture"
-        task.arguments = ["-x", "-t", "png", "/tmp/guidebot_screenshot.png"]
+    /// Capture screen excluding our app's windows using ScreenCaptureKit
+    private static func captureExcludingOurWindows() async throws -> NSImage? {
+        // Get shareable content
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         
-        do {
-            try task.run()
-            task.waitUntilExit()
-            
-            if let imageData = try? Data(contentsOf: URL(fileURLWithPath: "/tmp/guidebot_screenshot.png")),
-               let image = NSImage(data: imageData) {
-                try? FileManager.default.removeItem(atPath: "/tmp/guidebot_screenshot.png")
-                return image
-            }
-        } catch {
-            print("Screenshot failed: \(error)")
+        guard let display = content.displays.first else {
+            return nil
         }
         
-        return nil
+        // Get our app's bundle identifier to filter out our windows
+        let ourBundleID = Bundle.main.bundleIdentifier ?? "com.dhivakrishna.CrackedSiri"
+        
+        // Filter out our app's windows
+        let excludedWindows = content.windows.filter { window in
+            window.owningApplication?.bundleIdentifier == ourBundleID
+        }
+        
+        // Create a content filter that excludes our windows
+        let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
+        
+        // Configure the capture
+        let config = SCStreamConfiguration()
+        config.width = Int(display.width) * 2  // Retina
+        config.height = Int(display.height) * 2
+        config.scalesToFit = false
+        config.showsCursor = false
+        
+        // Capture the screenshot
+        let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        
+        return NSImage(cgImage: cgImage, size: NSSize(width: display.width, height: display.height))
     }
     
     /// Synchronous capture (legacy - includes app windows)
     static func captureScreen() -> NSImage? {
-        return captureScreenInternal()
+        var result: NSImage?
+        let semaphore = DispatchSemaphore(value: 0)
+        
+        Task {
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let display = content.displays.first else {
+                    semaphore.signal()
+                    return
+                }
+                
+                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let config = SCStreamConfiguration()
+                config.width = Int(display.width) * 2
+                config.height = Int(display.height) * 2
+                
+                let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                result = NSImage(cgImage: cgImage, size: NSSize(width: display.width, height: display.height))
+            } catch {
+                print("Screenshot failed: \(error)")
+            }
+            semaphore.signal()
+        }
+        
+        semaphore.wait()
+        return result
     }
     
     static func imageToBase64(_ image: NSImage) -> String? {

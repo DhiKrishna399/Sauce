@@ -7,26 +7,23 @@ import SwiftUI
 import AppKit
 
 struct MainWindowView: View {
-    @State private var screenshot: NSImage?
     @State private var response: GuideResponse?
     @State private var currentQuery: String?
     @State private var queryText: String = ""
     @State private var isLoading = false
-    @State private var isCapturing = false
     @State private var showHighlights = false
     @State private var errorMessage: String?
     @State private var backendConnected = false
-    @State private var isHovering = false
     
     let apiClient = APIClient()
     
     var body: some View {
         VStack(spacing: 0) {
+            // Top spacing for window controls (traffic lights)
+            Color.clear.frame(height: 28)
+            
             // Header
             headerView
-            
-            // Screenshot preview (compact)
-            screenshotSection
             
             // Query input
             queryInputSection
@@ -36,7 +33,6 @@ struct MainWindowView: View {
         }
         .background(.regularMaterial)
         .onAppear {
-            captureScreenshotWithoutUI()
             checkBackendConnection()
         }
     }
@@ -56,7 +52,7 @@ struct MainWindowView: View {
                         )
                     )
                 
-                Text("GuideBot")
+                Text("Sauce")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.primary.opacity(0.9))
             }
@@ -79,75 +75,8 @@ struct MainWindowView: View {
             .background(.ultraThinMaterial, in: Capsule())
         }
         .padding(.horizontal, 16)
-        .padding(.top, 14)
+        .padding(.top, 6)
         .padding(.bottom, 10)
-    }
-    
-    // MARK: - Screenshot Section
-    private var screenshotSection: some View {
-        ZStack {
-            // Screenshot thumbnail
-            if let screenshot = screenshot {
-                Image(nsImage: screenshot)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(height: 120)
-                    .clipped()
-                    .overlay(
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.3)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            } else {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .frame(height: 120)
-                    .overlay(
-                        VStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Capturing screen...")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                    )
-            }
-            
-            // Retake button overlay
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Button(action: captureScreenshotWithoutUI) {
-                        HStack(spacing: 6) {
-                            if isCapturing {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 12, height: 12)
-                            } else {
-                                Image(systemName: "arrow.triangle.2.circlepath.camera")
-                                    .font(.system(size: 11, weight: .medium))
-                            }
-                            Text(isCapturing ? "Capturing" : "Retake")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isCapturing)
-                    .padding(10)
-                }
-            }
-        }
-        .frame(height: 120)
-        .cornerRadius(12)
-        .padding(.horizontal, 12)
     }
     
     // MARK: - Query Input
@@ -289,11 +218,11 @@ struct MainWindowView: View {
                     )
                 )
             
-            Text("Ask me anything")
+            Text("Need some Sauce to assist? Just Ask")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.primary.opacity(0.8))
             
-            Text("I can help you navigate, find information,\nor explain what's on your screen")
+            Text("Ask me anything about what's on your screen")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -312,29 +241,21 @@ struct MainWindowView: View {
         }
     }
     
-    private func captureScreenshotWithoutUI() {
-        isCapturing = true
-        ScreenCaptureManager.captureScreenWithoutAppWindows { image in
-            DispatchQueue.main.async {
-                withAnimation(.spring(response: 0.3)) {
-                    self.screenshot = image
-                    self.isCapturing = false
-                }
-            }
-        }
-    }
-    
     private func handleQuery(_ query: String) async {
-        guard let screenshot = screenshot,
-              let imageBase64 = ScreenCaptureManager.imageToBase64(screenshot) else {
-            withAnimation { self.errorMessage = "Failed to capture screenshot" }
+        // Capture screenshot at submission time
+        guard let imageBase64 = await captureScreenshotAtSubmissionTime() else {
+            await MainActor.run {
+                withAnimation { self.errorMessage = "Failed to capture screenshot" }
+            }
             return
         }
         
-        withAnimation(.spring(response: 0.3)) {
-            isLoading = true
-            errorMessage = nil
-            currentQuery = query
+        await MainActor.run {
+            withAnimation(.spring(response: 0.3)) {
+                isLoading = true
+                errorMessage = nil
+                currentQuery = query
+            }
         }
         
         defer {
@@ -365,6 +286,18 @@ struct MainWindowView: View {
         }
     }
     
+    private func captureScreenshotAtSubmissionTime() async -> String? {
+        return await withCheckedContinuation { continuation in
+            ScreenCaptureManager.captureScreenWithoutAppWindows { image in
+                if let image = image, let base64 = ScreenCaptureManager.imageToBase64(image) {
+                    continuation.resume(returning: base64)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+    
     private func checkBackendConnection() {
         Task {
             do {
@@ -379,6 +312,7 @@ struct MainWindowView: View {
             }
         }
     }
+    
 }
 
 #Preview {
