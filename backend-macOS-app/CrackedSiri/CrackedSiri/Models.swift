@@ -56,10 +56,25 @@ struct ActionResponse: Codable {
     let message: String?
     let status: String?
     let callId: String?
+    let details: ActionDetails?
     
     enum CodingKeys: String, CodingKey {
-        case mode, type, intent, requiresConfirmation, message, status, callId
+        case mode, type, intent, requiresConfirmation, message, status, callId, details
     }
+    
+    var isEmailAction: Bool {
+        return intent == "send_email"
+    }
+}
+
+// MARK: - Action Details
+struct ActionDetails: Codable {
+    let messageId: String?
+    let recipientEmail: String?
+    let subject: String?
+    let body: String?
+    let purpose: String?
+    let timestamp: String?
 }
 
 // MARK: - Call Status Response

@@ -152,12 +152,15 @@ export interface ExtractedBusinessInfo {
 }
 
 export interface ParsedUserIntent {
-  action: 'reservation' | 'inquiry' | 'personal_call' | 'unknown';
+  action: 'reservation' | 'inquiry' | 'personal_call' | 'email' | 'unknown';
   partySize?: number;
   date?: string;
   time?: string;
   guestName?: string;
   specialRequests?: string;
+  emailRecipient?: string;
+  emailSubject?: string;
+  emailBody?: string;
   rawQuery: string;
 }
 
@@ -168,4 +171,71 @@ export interface PersonalMessageIntent {
   message: string;
   isUrgent: boolean;
   senderName: string;
+}
+
+// AgentMail Types
+export interface AgentMailConfig {
+  apiKey: string;
+  inboxId?: string;
+  mockMode: boolean;
+}
+
+export interface EmailIntent {
+  recipientEmail: string;
+  subject: string;
+  body: string;
+  htmlBody?: string;
+  purpose: 'confirmation' | 'inquiry' | 'follow_up' | 'general';
+}
+
+export interface EmailSendResult {
+  messageId: string;
+  status: 'sent' | 'failed' | 'queued';
+  timestamp: string;
+  recipientEmail: string;
+  subject: string;
+  errorMessage?: string;
+}
+
+export interface EmailMessage {
+  messageId: string;
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  receivedAt: string;
+}
+
+export interface ExtractedEmailInfo {
+  businessName: string;
+  emailAddress: string | null;
+  phoneNumber?: string | null;
+}
+
+export interface EmailActionResponse {
+  mode: 'action';
+  type: 'email_sent' | 'email_pending' | 'error';
+  intent: 'send_email';
+  status: 'success' | 'failed';
+  messageId?: string;
+  message: string;
+  details?: {
+    recipientEmail: string;
+    subject: string;
+    purpose: string;
+  };
+}
+
+export interface AgentMailWebhookEvent {
+  event: 'message.received' | 'message.sent' | 'message.delivered' | 'message.bounced';
+  inboxId: string;
+  messageId: string;
+  data: {
+    from?: string;
+    to?: string;
+    subject?: string;
+    text?: string;
+    timestamp?: string;
+  };
 }

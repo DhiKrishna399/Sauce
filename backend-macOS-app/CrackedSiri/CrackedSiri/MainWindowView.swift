@@ -291,70 +291,123 @@ struct MainWindowView: View {
     
     // MARK: - Action Result View
     private func actionResultView(response: ActionResponse) -> some View {
-        VStack(spacing: 16) {
-            // Icon based on status
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: response.status == "success" ? [.green, .mint] : [.orange, .yellow],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 60, height: 60)
-                
-                Image(systemName: response.type == "executed" ? "phone.arrow.up.right.fill" : "phone.fill")
-                    .font(.system(size: 26))
-                    .foregroundColor(.white)
-            }
-            .shadow(color: response.status == "success" ? .green.opacity(0.4) : .orange.opacity(0.4), radius: 10)
-            
-            // Message
-            Text(response.message ?? "Processing...")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.primary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            // Call ID if available
-            if let callId = response.callId {
-                HStack(spacing: 6) {
-                    Image(systemName: "number.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    Text("Call ID: \(callId)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-            
-            // Status indicator
-            if response.type == "executed" {
-                HStack(spacing: 8) {
+        ScrollView {
+            VStack(spacing: 16) {
+                // Icon based on action type
+                ZStack {
                     Circle()
-                        .fill(Color.green)
-                        .frame(width: 8, height: 8)
-                    Text("Call initiated")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.green)
+                        .fill(
+                            LinearGradient(
+                                colors: response.status == "success" ? 
+                                    (response.isEmailAction ? [.blue, .cyan] : [.green, .mint]) : 
+                                    [.orange, .yellow],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 60, height: 60)
+                    
+                    Image(systemName: response.isEmailAction ? "envelope.fill" : 
+                          (response.type == "executed" ? "phone.arrow.up.right.fill" : "phone.fill"))
+                        .font(.system(size: 26))
+                        .foregroundColor(.white)
                 }
-                .padding(.top, 8)
-            } else if response.type == "error" {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                    Text("Action failed")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.orange)
+                .shadow(color: response.status == "success" ? 
+                        (response.isEmailAction ? .blue.opacity(0.4) : .green.opacity(0.4)) : 
+                        .orange.opacity(0.4), radius: 10)
+                
+                // Message
+                Text(response.message ?? "Processing...")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                // Email details if this is an email action
+                if response.isEmailAction, let details = response.details {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // Subject
+                        if let subject = details.subject {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "text.alignleft")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    Text("Subject")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                        .textCase(.uppercase)
+                                }
+                                Text(subject)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                        
+                        // Body
+                        if let body = details.body {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "doc.text")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    Text("Message")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                        .textCase(.uppercase)
+                                }
+                                Text(body)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.primary.opacity(0.8))
+                                    .lineLimit(6)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal)
                 }
-                .padding(.top, 8)
+                
+                // Call ID if available (for phone calls)
+                if let callId = response.callId {
+                    HStack(spacing: 6) {
+                        Image(systemName: "number.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        Text("Call ID: \(callId)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                }
+                
+                // Status indicator
+                if response.type == "executed" {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text(response.isEmailAction ? "Email sent" : "Call initiated")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.green)
+                    }
+                    .padding(.top, 8)
+                } else if response.type == "error" {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Action failed")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.top, 8)
+                }
             }
+            .padding(.vertical, 24)
         }
-        .padding(.vertical, 24)
     }
     
     // MARK: - State Views
@@ -569,14 +622,28 @@ struct MainWindowView: View {
             return "action"
         }
         
+        // Check for email addresses in query
+        let emailPattern = #"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"#
+        if let _ = lowercased.range(of: emailPattern, options: .regularExpression) {
+            return "action"
+        }
+        
         let actionKeywords = [
+            // Email keywords
+            "email", "e-mail", "send an email", "send email", "email them", "email him", "email her",
+            // Phone keywords
             "call", "phone", "dial",
+            // Reservation keywords
             "book", "reserve", "reservation", "make a reservation",
             "schedule", "appointment",
+            // Purchase keywords
             "order", "purchase", "buy",
+            // Message keywords
             "tell them", "tell her", "tell him",
             "leave a message", "send a message", "let them know",
-            "remind", "notify", "inform"
+            "remind", "notify", "inform",
+            // SMS keywords
+            "text", "sms"
         ]
         
         for keyword in actionKeywords {

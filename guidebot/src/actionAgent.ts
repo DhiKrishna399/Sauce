@@ -1,14 +1,17 @@
 import { GoogleGenerativeAI, Part } from "@google/generative-ai";
 import { 
   ExtractedBusinessInfo, 
+  ExtractedEmailInfo,
   ParsedUserIntent, 
   ReservationIntent,
   PersonalMessageIntent,
+  EmailIntent,
   ActionIntentResponse 
 } from "./types";
 import { extractJsonFromText } from "./utils";
 import { logger } from "./logger";
 import { getAgentPhoneClient } from "./agentPhone";
+import { getAgentMailClient } from "./agentMail";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -16,6 +19,15 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const PHONE_PATTERNS = [
   /\+1?\d{10,11}/g,                           // +1234567890 or +11234567890
   /\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,    // (123) 456-7890, 123-456-7890, 123.456.7890
+];
+
+// Email regex pattern
+const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+
+// Keywords that indicate email intent
+const EMAIL_KEYWORDS = [
+  "email", "e-mail", "send an email", "send email", "write an email",
+  "message them", "contact via email", "reach out by email", "email them"
 ];
 
 export async function analyzeActionIntent(
@@ -27,6 +39,15 @@ export async function analyzeActionIntent(
   const ctx = { requestId };
   
   try {
+    // Check if this is an email intent
+    const emailInQuery = extractEmailFromQuery(query);
+    const hasEmailKeyword = EMAIL_KEYWORDS.some(kw => query.toLowerCase().includes(kw));
+    
+    if (emailInQuery || hasEmailKeyword) {
+      logger.info("Detected email intent", { ...ctx, emailInQuery, hasKeyword: hasEmailKeyword });
+      return handleEmailAction(imageBase64, query, emailInQuery, requestId);
+    }
+
     // Check if this is a personal call (phone number in query)
     const phoneInQuery = extractPhoneFromQuery(query);
     if (phoneInQuery) {
@@ -39,11 +60,18 @@ export async function analyzeActionIntent(
     const businessInfo = await extractBusinessInfo(imageBase64, requestId);
     
     if (!businessInfo.phoneNumber) {
-      logger.warn("No phone number found in screenshot", ctx);
+      // No phone number - check if we can send an email instead
+      const emailInfo = await extractEmailInfo(imageBase64, requestId);
+      if (emailInfo.emailAddress) {
+        logger.info("No phone, but found email - suggesting email action", { ...ctx, email: emailInfo.emailAddress });
+        return handleEmailAction(imageBase64, query, emailInfo.emailAddress, requestId);
+      }
+      
+      logger.warn("No phone number or email found in screenshot", ctx);
       return {
         mode: "action",
         type: "error",
-        message: "Could not find a phone number on the screen. Please make sure the restaurant's phone number is visible, or include a phone number in your request.",
+        message: "Could not find a phone number or email on the screen. Please make sure contact information is visible, or include it in your request.",
         details: { extractedInfo: businessInfo },
       };
     }
@@ -52,11 +80,19 @@ export async function analyzeActionIntent(
     logger.info("Parsing user intent from query", ctx);
     const userIntent = await parseUserIntent(query, businessInfo, requestId);
     
+    if (userIntent.action === "email") {
+      // User wants to email even though we found a phone
+      const emailInfo = await extractEmailInfo(imageBase64, requestId);
+      if (emailInfo.emailAddress) {
+        return handleEmailAction(imageBase64, query, emailInfo.emailAddress, requestId);
+      }
+    }
+    
     if (userIntent.action !== "reservation") {
       return {
         mode: "action",
         type: "error",
-        message: `I can only help with reservations right now. You asked about: "${userIntent.action}"`,
+        message: `I can only help with reservations and emails right now. You asked about: "${userIntent.action}"`,
         details: { parsedIntent: userIntent },
       };
     }
@@ -114,6 +150,160 @@ function extractPhoneFromQuery(query: string): string | null {
     }
   }
   return null;
+}
+
+function extractEmailFromQuery(query: string): string | null {
+  const match = query.match(EMAIL_PATTERN);
+  return match ? match[0] : null;
+}
+
+async function handleEmailAction(
+  imageBase64: string,
+  query: string,
+  recipientEmail: string | null,
+  requestId?: string
+): Promise<ActionIntentResponse> {
+  const ctx = { requestId };
+  
+  try {
+    // If no email in query, try to extract from screenshot
+    if (!recipientEmail) {
+      const emailInfo = await extractEmailInfo(imageBase64, requestId);
+      if (!emailInfo.emailAddress) {
+        return {
+          mode: "action",
+          type: "error",
+          message: "Could not find an email address. Please make sure an email is visible on screen or include it in your request.",
+        };
+      }
+      recipientEmail = emailInfo.emailAddress;
+    }
+
+    // Parse the email intent
+    const emailIntent = await parseEmailIntent(query, recipientEmail, requestId);
+    
+    logger.info("Parsed email intent", { 
+      ...ctx, 
+      to: recipientEmail,
+      subject: emailIntent.subject.substring(0, 50),
+      purpose: emailIntent.purpose,
+    });
+
+    // Send the email
+    const mailClient = getAgentMailClient();
+    const result = await mailClient.sendEmail(emailIntent, requestId);
+
+    return {
+      mode: "action",
+      type: "executed",
+      intent: "send_email",
+      status: "success",
+      message: `Email sent to ${recipientEmail}!`,
+      details: {
+        messageId: result.messageId,
+        recipientEmail: result.recipientEmail,
+        subject: emailIntent.subject,
+        body: emailIntent.body,
+        purpose: emailIntent.purpose,
+        timestamp: result.timestamp,
+      },
+    };
+
+  } catch (error) {
+    logger.error("Email action failed", error, ctx);
+    return {
+      mode: "action",
+      type: "error",
+      message: error instanceof Error ? error.message : "Failed to send email",
+    };
+  }
+}
+
+async function extractEmailInfo(imageBase64: string, requestId?: string): Promise<ExtractedEmailInfo> {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+  const systemPrompt = `You are analyzing a screenshot to extract contact information.
+Look for email addresses and business information.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "businessName": "Business Name",
+  "emailAddress": "email@example.com or null if not found",
+  "phoneNumber": "phone number or null if not found"
+}
+
+IMPORTANT: 
+- Look EVERYWHERE for email addresses: header, footer, contact section, "Email" buttons, mailto links
+- Email addresses might appear as text or in buttons/links
+- Return raw JSON only, no markdown formatting`;
+
+  const imagePart: Part = {
+    inlineData: {
+      data: imageBase64,
+      mimeType: "image/png"
+    }
+  };
+
+  const result = await model.generateContent([systemPrompt, imagePart]);
+  const responseText = result.response.text();
+  
+  logger.debug("Email extraction raw response", { requestId, response: responseText.substring(0, 200) });
+
+  const parsed = extractJsonFromText(responseText) || JSON.parse(responseText);
+  
+  return {
+    businessName: parsed.businessName || "Unknown Business",
+    emailAddress: parsed.emailAddress || null,
+    phoneNumber: parsed.phoneNumber || null,
+  };
+}
+
+async function parseEmailIntent(
+  query: string,
+  recipientEmail: string,
+  requestId?: string
+): Promise<EmailIntent> {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+  const systemPrompt = `You are parsing a user's request to send an email.
+
+User's request: "${query}"
+Recipient email: ${recipientEmail}
+
+Extract the email content and return ONLY valid JSON:
+{
+  "subject": "A clear, professional subject line",
+  "body": "The full email body text, properly formatted",
+  "purpose": "confirmation" or "inquiry" or "follow_up" or "general"
+}
+
+EXAMPLES:
+- "Email them to ask about availability" → {"subject": "Inquiry About Availability", "body": "Hello,\\n\\nI am writing to inquire about availability...\\n\\nBest regards", "purpose": "inquiry"}
+- "Send an email confirming our meeting" → {"subject": "Meeting Confirmation", "body": "Hello,\\n\\nThis is to confirm our upcoming meeting...\\n\\nBest regards", "purpose": "confirmation"}
+- "Email them a thank you note" → {"subject": "Thank You", "body": "Hello,\\n\\nThank you for...\\n\\nBest regards", "purpose": "follow_up"}
+- "Send them info about our project" → {"subject": "Project Information", "body": "Hello,\\n\\nI wanted to share some information about our project...\\n\\nBest regards", "purpose": "general"}
+
+RULES:
+- Create a professional, concise subject line
+- Write a polite, well-formatted email body
+- Include appropriate greeting and sign-off
+- Match the tone to the purpose (formal for inquiries, warm for follow-ups)
+
+Return raw JSON only.`;
+
+  const result = await model.generateContent(systemPrompt);
+  const responseText = result.response.text();
+  
+  logger.debug("Email intent parsing raw response", { requestId, response: responseText.substring(0, 200) });
+
+  const parsed = extractJsonFromText(responseText) || JSON.parse(responseText);
+  
+  return {
+    recipientEmail,
+    subject: parsed.subject || "Message from Guidebot",
+    body: parsed.body || "Hello,\n\nThank you for your time.\n\nBest regards",
+    purpose: parsed.purpose || "general",
+  };
 }
 
 async function handlePersonalCall(
@@ -265,7 +455,7 @@ Restaurant: ${businessInfo.businessName}
 
 Determine what the user wants and extract details. Return ONLY valid JSON:
 {
-  "action": "reservation" or "inquiry" or "unknown",
+  "action": "reservation" or "inquiry" or "email" or "personal_call" or "unknown",
   "partySize": number or null,
   "date": "formatted date like 'May 17, 2026' or null",
   "time": "formatted time like '7:00 PM' or null", 
@@ -282,6 +472,8 @@ PARSING RULES:
 - If no time specified, default to "7:00 PM"
 - If no party size specified, default to 2
 - "book", "reserve", "make a reservation", "get a table" = action: "reservation"
+- "email", "send email", "email them", "send an email" = action: "email"
+- "call", "phone", "ring", "contact by phone" = action: "personal_call"
 
 Return raw JSON only.`;
 

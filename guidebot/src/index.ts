@@ -6,9 +6,10 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import { generateGuide } from "./guideAgent";
 import { analyzeActionIntent, getCallResult } from "./actionAgent";
-import { AnalyzeRequest, ActionIntentResponse, WebhookEvent } from "./types";
+import { AnalyzeRequest, ActionIntentResponse, WebhookEvent, AgentMailWebhookEvent } from "./types";
 import { logger, generateRequestId } from "./logger";
 import { getAgentPhoneClient } from "./agentPhone";
+import { getAgentMailClient } from "./agentMail";
 
 const app = express();
 app.use(cors());
@@ -47,33 +48,58 @@ app.get("/health", (req: Request, res: Response) => {
   });
 });
 
+// Keywords that indicate the user wants to perform an action (not just get help)
+const ACTION_KEYWORDS = [
+  "email", "e-mail", "send an email", "send email", "email them", "email him", "email her",
+  "call", "phone", "ring", "dial", "call them", "call him", "call her",
+  "book", "reserve", "make a reservation", "get a table", "book a table",
+  "order", "purchase", "buy",
+  "schedule", "set up", "arrange",
+  "text", "message", "sms",
+];
+
+// Check if query contains action keywords
+function shouldUseActionMode(query: string): boolean {
+  const lowerQuery = query.toLowerCase();
+  return ACTION_KEYWORDS.some(keyword => lowerQuery.includes(keyword));
+}
+
 // Main analyze endpoint
 app.post("/analyze", async (req: Request, res: Response) => {
   const requestId = (req as any).requestId;
   const startTime = (req as any).startTime;
   
   try {
-    const { imageBase64, query, mode, context } = req.body as AnalyzeRequest;
+    const { imageBase64, query, mode: requestedMode, context } = req.body as AnalyzeRequest;
 
     // Validate input
-    if (!imageBase64 || !query || !mode) {
-      logger.warn("Missing required fields in request", { requestId, hasImage: !!imageBase64, hasQuery: !!query, hasMode: !!mode });
+    if (!imageBase64 || !query || !requestedMode) {
+      logger.warn("Missing required fields in request", { requestId, hasImage: !!imageBase64, hasQuery: !!query, hasMode: !!requestedMode });
       return res.status(400).json({
         error: "Missing required fields: imageBase64, query, mode",
         requestId,
       });
     }
 
-    if (!["guide", "action"].includes(mode)) {
-      logger.warn("Invalid mode specified", { requestId, mode });
+    if (!["guide", "action"].includes(requestedMode)) {
+      logger.warn("Invalid mode specified", { requestId, mode: requestedMode });
       return res.status(400).json({ error: "Mode must be 'guide' or 'action'", requestId });
+    }
+
+    // Auto-detect action mode based on keywords
+    const detectedAction = shouldUseActionMode(query);
+    const mode = detectedAction ? "action" : requestedMode;
+    
+    if (detectedAction && requestedMode === "guide") {
+      logger.info("Auto-switching to ACTION mode based on query keywords", { requestId, query: query.substring(0, 50) });
     }
 
     logger.info(`Processing ${mode.toUpperCase()} request`, { 
       requestId, 
       query: query.substring(0, 100),
       imageSize: `${Math.round(imageBase64.length / 1024)}KB`,
-      appContext: context?.appName 
+      appContext: context?.appName,
+      autoDetected: detectedAction
     });
 
     if (mode === "guide") {
@@ -173,6 +199,50 @@ app.post("/webhook/agentphone", async (req: Request, res: Response) => {
     res.status(200).send("OK");
   } catch (error) {
     logger.error("Webhook processing failed", error, { requestId });
+    res.status(500).send("Error processing webhook");
+  }
+});
+
+// AgentMail webhook endpoint
+app.post("/webhook/agentmail", async (req: Request, res: Response) => {
+  const requestId = (req as any).requestId;
+  
+  try {
+    const event = req.body as AgentMailWebhookEvent;
+    logger.info("Received AgentMail webhook", { 
+      requestId, 
+      event: event.event, 
+      messageId: event.messageId,
+      inboxId: event.inboxId,
+    });
+
+    if (event.event === "message.received") {
+      logger.info("Email received", { 
+        requestId,
+        messageId: event.messageId,
+        from: event.data.from,
+        subject: event.data.subject,
+      });
+      
+      // TODO: Process incoming email - could trigger auto-reply or notification
+      // For now, just log it
+    } else if (event.event === "message.delivered") {
+      logger.info("Email delivered", { 
+        requestId,
+        messageId: event.messageId,
+        to: event.data.to,
+      });
+    } else if (event.event === "message.bounced") {
+      logger.warn("Email bounced", { 
+        requestId,
+        messageId: event.messageId,
+        to: event.data.to,
+      });
+    }
+
+    res.status(200).send("OK");
+  } catch (error) {
+    logger.error("AgentMail webhook processing failed", error, { requestId });
     res.status(500).send("Error processing webhook");
   }
 });
@@ -278,24 +348,27 @@ app.use((req: Request, res: Response) => {
 
 // Startup
 const PORT = process.env.PORT || 3000;
-const isMockMode = process.env.AGENTPHONE_MOCK === "true" || !process.env.AGENTPHONE_API_KEY;
+const isPhoneMockMode = process.env.AGENTPHONE_MOCK === "true" || !process.env.AGENTPHONE_API_KEY;
+const isMailMockMode = process.env.AGENTMAIL_MOCK === "true" || !process.env.AGENTMAIL_API_KEY;
 
 app.listen(PORT, () => {
   logger.info("=".repeat(50));
-  logger.info("Sauce backend starting up");
+  logger.info("Guidebot backend starting up");
   logger.info(`Server listening on http://localhost:${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || "development"}`);
   logger.info(`Gemini API Key: ${process.env.GEMINI_API_KEY ? "Configured" : "MISSING!"}`);
-  logger.info(`AgentPhone: ${isMockMode ? "MOCK MODE (no API key)" : "Live mode"}`);
+  logger.info(`AgentPhone: ${isPhoneMockMode ? "MOCK MODE (no API key)" : "Live mode"}`);
+  logger.info(`AgentMail: ${isMailMockMode ? "MOCK MODE (no API key)" : "Live mode"}`);
   logger.info("");
   logger.info("Endpoints:");
-  logger.info("  POST /analyze        - Guide or Action mode");
-  logger.info("  GET  /health         - Health check");
-  logger.info("  GET  /call/:callId   - Get call status");
-  logger.info("  POST /webhook/agentphone - AgentPhone webhooks");
+  logger.info("  POST /analyze              - Guide or Action mode (calls + emails)");
+  logger.info("  GET  /health               - Health check");
+  logger.info("  GET  /call/:callId         - Get call status");
+  logger.info("  POST /webhook/agentphone   - AgentPhone webhooks");
+  logger.info("  POST /webhook/agentmail    - AgentMail webhooks");
   logger.info("");
   logger.info("Test Endpoints:");
-  logger.info("  POST /test/simulate-call     - Simulate a call");
-  logger.info("  GET  /test/call-status/:id   - Get simulated status");
+  logger.info("  POST /test/simulate-call   - Simulate a call");
+  logger.info("  GET  /test/call-status/:id - Get simulated status");
   logger.info("=".repeat(50));
 });
