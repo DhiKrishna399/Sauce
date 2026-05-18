@@ -29,6 +29,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupFloatingWindow()
+        
+        // Initialize the highlight overlay manager
+        _ = HighlightOverlayManager.shared
     }
     
     private func setupStatusItem() {

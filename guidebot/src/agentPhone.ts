@@ -403,9 +403,13 @@ IMPORTANT:
   analyzeCallOutcome(transcripts: CallTranscript[], callType: 'reservation' | 'personal' = 'reservation'): { 
     success: boolean; 
     message: string; 
-    confirmationDetails?: string 
+    confirmationDetails?: string;
+    recipientReply?: string;
   } {
     const fullText = transcripts.map(t => t.content.toLowerCase()).join(" ");
+    
+    // Extract the recipient's reply - look for their responses after the message was delivered
+    const recipientReply = this.extractRecipientReply(transcripts, callType);
     
     if (callType === 'personal') {
       // For personal calls, check if the message was delivered
@@ -434,22 +438,25 @@ IMPORTANT:
       
       if (wasDelivered && !failed) {
         // Check if they had a reply
-        const hasReply = fullText.includes("tell them") || fullText.includes("let them know") || fullText.includes("pass along");
+        const hasReply = recipientReply && recipientReply.length > 0;
         return {
           success: true,
           message: hasReply ? "Message delivered! They sent a reply." : "Message delivered successfully!",
           confirmationDetails: transcripts.find(t => t.role === "user")?.content,
+          recipientReply,
         };
       } else if (failed) {
         return {
           success: false,
           message: "Could not deliver the message.",
+          recipientReply,
         };
       } else {
         // For personal calls, if it completed, assume success
         return {
           success: true,
           message: "Call completed - message delivered.",
+          recipientReply,
         };
       }
     }
@@ -483,18 +490,87 @@ IMPORTANT:
           t.role === "user" && 
           (t.content.toLowerCase().includes("set") || t.content.toLowerCase().includes("confirmed"))
         )?.content,
+        recipientReply,
       };
     } else if (isFailure) {
       return {
         success: false,
         message: "Could not complete reservation - restaurant was unavailable at the requested time.",
+        recipientReply,
       };
     } else {
       return {
         success: false,
         message: "Call completed but reservation status is unclear. Please call directly to confirm.",
+        recipientReply,
       };
     }
+  }
+
+  // Extract the meaningful reply from the recipient
+  private extractRecipientReply(transcripts: CallTranscript[], callType: 'reservation' | 'personal'): string | undefined {
+    if (transcripts.length === 0) return undefined;
+
+    // Get all user (recipient) messages
+    const userMessages = transcripts.filter(t => t.role === "user");
+    if (userMessages.length === 0) return undefined;
+
+    if (callType === 'personal') {
+      // For personal calls, look for a reply message after the agent asks about passing a message back
+      // Find the index where agent asks about reply
+      const agentAsksReplyIndex = transcripts.findIndex(t => 
+        t.role === "agent" && 
+        (t.content.toLowerCase().includes("pass any message") || 
+         t.content.toLowerCase().includes("like me to tell") ||
+         t.content.toLowerCase().includes("want me to pass") ||
+         t.content.toLowerCase().includes("message back"))
+      );
+
+      if (agentAsksReplyIndex !== -1) {
+        // Get user messages after the agent asks about a reply
+        const replyMessages = transcripts
+          .slice(agentAsksReplyIndex + 1)
+          .filter(t => t.role === "user")
+          .map(t => t.content);
+        
+        if (replyMessages.length > 0) {
+          return replyMessages.join(" ");
+        }
+      }
+
+      // Fallback: return the last substantive user message (not just "okay" or "bye")
+      const substantiveReplies = userMessages.filter(t => {
+        const content = t.content.toLowerCase();
+        const trivialResponses = ["okay", "ok", "bye", "goodbye", "thanks", "thank you", "yes", "no", "sure"];
+        return !trivialResponses.includes(content.trim());
+      });
+
+      if (substantiveReplies.length > 0) {
+        return substantiveReplies[substantiveReplies.length - 1].content;
+      }
+    } else {
+      // For reservation calls, extract key info from restaurant's response
+      const confirmationMessage = userMessages.find(t => {
+        const content = t.content.toLowerCase();
+        return content.includes("all set") || 
+               content.includes("confirmed") || 
+               content.includes("reservation") ||
+               content.includes("booked");
+      });
+
+      if (confirmationMessage) {
+        return confirmationMessage.content;
+      }
+
+      // Return the last substantive message from the restaurant
+      const lastSubstantive = userMessages
+        .filter(t => t.content.length > 20)
+        .pop();
+      
+      return lastSubstantive?.content;
+    }
+
+    return undefined;
   }
 }
 

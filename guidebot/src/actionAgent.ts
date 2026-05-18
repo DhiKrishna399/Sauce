@@ -88,13 +88,10 @@ export async function analyzeActionIntent(
       }
     }
     
-    if (userIntent.action !== "reservation") {
-      return {
-        mode: "action",
-        type: "error",
-        message: `I can only help with reservations and emails right now. You asked about: "${userIntent.action}"`,
-        details: { parsedIntent: userIntent },
-      };
+    // Handle inquiry calls (ask about availability, hours, etc.)
+    if (userIntent.action === "inquiry" || userIntent.action === "personal_call") {
+      logger.info("Handling inquiry call to business", { ...ctx, business: businessInfo.businessName });
+      return handleInquiryCall(query, businessInfo, requestId);
     }
 
     // Build reservation intent
@@ -343,6 +340,93 @@ async function handlePersonalCall(
   };
 }
 
+async function handleInquiryCall(
+  query: string,
+  businessInfo: ExtractedBusinessInfo,
+  requestId?: string
+): Promise<ActionIntentResponse> {
+  const ctx = { requestId };
+  
+  // Parse what the user wants to ask
+  const inquiryDetails = await parseInquiryIntent(query, businessInfo, requestId);
+  
+  logger.info("Parsed inquiry intent", { 
+    ...ctx, 
+    business: businessInfo.businessName,
+    question: inquiryDetails.question.substring(0, 50) + "..."
+  });
+
+  // Create a message intent for the inquiry call
+  const messageIntent: PersonalMessageIntent = {
+    phoneNumber: formatPhoneNumber(businessInfo.phoneNumber!),
+    recipientName: businessInfo.businessName,
+    message: inquiryDetails.question,
+    isUrgent: false,
+    senderName: "a potential customer",
+  };
+
+  // Initiate the call
+  const client = getAgentPhoneClient();
+  const call = await client.initiatePersonalCall(messageIntent, requestId);
+  
+  return {
+    mode: "action",
+    type: "executed",
+    intent: "business_inquiry",
+    status: "success",
+    callId: call.id,
+    message: `Calling ${businessInfo.businessName} to ask: "${inquiryDetails.question}"`,
+    details: {
+      business: businessInfo.businessName,
+      question: inquiryDetails.question,
+      callStatus: call.status,
+    },
+  };
+}
+
+async function parseInquiryIntent(
+  query: string,
+  businessInfo: ExtractedBusinessInfo,
+  requestId?: string
+): Promise<{ question: string }> {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+  const systemPrompt = `You are parsing a user's request to call a business and ask a question.
+
+User's request: "${query}"
+Business: ${businessInfo.businessName}
+
+Extract what the user wants to ask and return ONLY valid JSON:
+{
+  "question": "the question to ask the business, phrased naturally"
+}
+
+EXAMPLES:
+- "Call them and ask about availability" → {"question": "I'm calling to ask about your availability. Do you have any openings?"}
+- "Ask what time they close" → {"question": "What time do you close today?"}
+- "Call and check if they have outdoor seating" → {"question": "Do you have outdoor seating available?"}
+- "Ask about their specials" → {"question": "What are your specials today?"}
+- "Find out if they take walk-ins" → {"question": "Do you accept walk-ins or do I need a reservation?"}
+
+RULES:
+- Phrase the question naturally as if speaking on the phone
+- Be polite and professional
+- Keep it concise
+
+Return raw JSON only.`;
+
+  const result = await model.generateContent(systemPrompt);
+  const responseText = result.response.text();
+  
+  logger.debug("Inquiry intent parsing raw response", { requestId, response: responseText.substring(0, 200) });
+
+  const parsed = extractJsonFromText(responseText) || JSON.parse(responseText);
+  
+  return {
+    question: parsed.question || "I'm calling to ask a question about your business.",
+  };
+}
+
 async function parsePersonalMessageIntent(
   query: string,
   phoneNumber: string,
@@ -473,7 +557,8 @@ PARSING RULES:
 - If no party size specified, default to 2
 - "book", "reserve", "make a reservation", "get a table" = action: "reservation"
 - "email", "send email", "email them", "send an email" = action: "email"
-- "call", "phone", "ring", "contact by phone" = action: "personal_call"
+- "ask about", "check if", "find out", "what time", "do they have", "availability", "hours", "specials" = action: "inquiry"
+- "call", "phone", "ring", "contact by phone" (without booking intent) = action: "inquiry"
 
 Return raw JSON only.`;
 
@@ -532,6 +617,7 @@ export async function getCallResult(callId: string, requestId?: string): Promise
   success?: boolean;
   message: string;
   transcript?: string;
+  recipientReply?: string;
 }> {
   const client = getAgentPhoneClient();
   
@@ -556,6 +642,7 @@ export async function getCallResult(callId: string, requestId?: string): Promise
         success: outcome.success,
         message: outcome.message,
         transcript: transcripts.map(t => `${t.role}: ${t.content}`).join("\n"),
+        recipientReply: outcome.recipientReply,
       };
     }
     

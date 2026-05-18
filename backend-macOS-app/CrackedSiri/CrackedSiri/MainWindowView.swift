@@ -61,6 +61,17 @@ struct MainWindowView: View {
             
             Spacer()
             
+            // Test highlight button (for development)
+            Button(action: {
+                HighlightOverlayManager.shared.showTestHighlight()
+            }) {
+                Image(systemName: "scope")
+                    .font(.system(size: 12))
+                    .foregroundColor(.orange)
+            }
+            .buttonStyle(.plain)
+            .help("Test highlight overlay")
+            
             // Status indicator
             HStack(spacing: 6) {
                 Circle()
@@ -684,6 +695,7 @@ struct ConversationItemView: View {
     @Binding var showHighlights: Bool
     let statusColors: (CallStatusResponse) -> [Color]
     let statusIcon: (CallStatusResponse) -> String
+    @State private var selectedStep: Int? = nil
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -702,6 +714,9 @@ struct ConversationItemView: View {
             } else if let guideResponse = item.guideResponse {
                 guideResponseBubble(response: guideResponse)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .highlightsDismissed)) { _ in
+            selectedStep = nil
         }
     }
     
@@ -790,9 +805,23 @@ struct ConversationItemView: View {
                 .fixedSize(horizontal: false, vertical: true)
             
             if response.isHowTo && !response.steps.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "hand.tap")
+                            .font(.system(size: 9))
+                        Text("Tap a step to highlight on screen")
+                            .font(.system(size: 10))
+                    }
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.bottom, 4)
+                    
                     ForEach(response.steps) { step in
-                        StepRowCompact(step: step, totalSteps: response.steps.count)
+                        StepRowCompact(
+                            step: step,
+                            totalSteps: response.steps.count,
+                            highlight: findHighlightForStep(step.step, in: response.highlights),
+                            selectedStep: $selectedStep
+                        )
                     }
                 }
             }
@@ -910,6 +939,35 @@ struct ConversationItemView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             
+            // Recipient Reply - shown prominently if available
+            if status.hasReply, let reply = status.recipientReply {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.left.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(.blue)
+                        Text("Their Reply")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.blue)
+                    }
+                    
+                    Text("\"\(reply)\"")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                        .italic()
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.blue.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                        )
+                )
+            }
+            
             if let transcript = status.transcript, !transcript.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Transcript")
@@ -928,12 +986,32 @@ struct ConversationItemView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
+    
+    private func findHighlightForStep(_ stepNumber: Int, in highlights: [Highlight]) -> Highlight? {
+        if highlights.isEmpty { return nil }
+        
+        if let matchingHighlight = highlights.first(where: { $0.label.contains("Step \(stepNumber)") || $0.label.contains("step \(stepNumber)") }) {
+            return matchingHighlight
+        }
+        
+        if stepNumber <= highlights.count {
+            return highlights[stepNumber - 1]
+        }
+        
+        return highlights.first
+    }
 }
 
 // MARK: - Compact Step Row for History
 struct StepRowCompact: View {
     let step: GuideStep
     let totalSteps: Int
+    let highlight: Highlight?
+    @Binding var selectedStep: Int?
+    
+    private var isSelected: Bool {
+        selectedStep == step.step
+    }
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -943,7 +1021,11 @@ struct StepRowCompact: View {
                 .frame(width: 20, height: 20)
                 .background(
                     Circle()
-                        .fill(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
+                        .fill(LinearGradient(
+                            colors: isSelected ? [.orange, .red] : [.blue, .purple],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ))
                 )
             
             VStack(alignment: .leading, spacing: 2) {
@@ -952,10 +1034,51 @@ struct StepRowCompact: View {
                     .foregroundColor(.primary.opacity(0.9))
                 
                 if !step.elementDescription.isEmpty {
-                    Text(step.elementDescription)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 4) {
+                        Text(step.elementDescription)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        
+                        if highlight != nil {
+                            Image(systemName: "scope")
+                                .font(.system(size: 9))
+                                .foregroundColor(.orange)
+                        }
+                    }
                 }
+            }
+            
+            Spacer()
+            
+            if highlight != nil {
+                Image(systemName: isSelected ? "eye.fill" : "eye")
+                    .font(.system(size: 12))
+                    .foregroundColor(isSelected ? .orange : .secondary.opacity(0.6))
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.orange.opacity(0.1) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.orange.opacity(0.3) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            handleTap()
+        }
+    }
+    
+    private func handleTap() {
+        if isSelected {
+            selectedStep = nil
+            HighlightOverlayManager.shared.hideAll()
+        } else {
+            selectedStep = step.step
+            if let highlight = highlight {
+                HighlightOverlayManager.shared.showHighlight(highlight, forStep: step.step)
             }
         }
     }

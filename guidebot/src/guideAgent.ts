@@ -26,7 +26,10 @@ IMPORTANT: Determine the type of question:
 
 For "howto" questions:
 - Provide numbered steps with clear instructions
-- Include visual highlights showing where to click
+- CRITICAL: Include a highlight for EACH step showing exactly where to click/look
+- Each highlight MUST have a label like "Step 1", "Step 2", etc. to match the step number
+- Use pixel coordinates from the screenshot image (x, y measured from top-left)
+- Estimate the approximate bounding box around the UI element
 
 For "informational" questions:
 - Provide a direct, helpful answer in the explanation
@@ -41,10 +44,19 @@ Always respond with valid JSON matching this exact structure:
     { "step": 1, "instruction": "Click the X button", "elementDescription": "Blue button labeled 'X' in top right" }
   ],
   "highlights": [
-    { "type": "circle", "x": 100, "y": 50, "radius": 40, "label": "Step 1" },
-    { "type": "box", "x": 300, "y": 200, "width": 100, "height": 40, "label": "Here" }
+    { "type": "box", "x": 1200, "y": 50, "width": 80, "height": 40, "label": "Step 1", "color": "#FF6B6B" },
+    { "type": "box", "x": 300, "y": 200, "width": 150, "height": 50, "label": "Step 2", "color": "#4ECDC4" }
   ]
 }
+
+HIGHLIGHT RULES:
+- Use "box" type for buttons, menu items, input fields (most common)
+- Use "circle" type for icons, small buttons, or circular elements
+- x, y coordinates are the TOP-LEFT corner of the bounding box (in image pixels)
+- width, height define the size of the highlight box
+- For circle type, use "radius" instead of width/height, and x,y is the CENTER
+- label MUST be "Step N" where N matches the step number
+- color is optional but recommended for visual distinction
 
 For informational questions, steps should be an empty array: "steps": []
 

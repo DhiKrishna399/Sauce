@@ -84,6 +84,11 @@ struct CallStatusResponse: Codable {
     let message: String
     let success: Bool?
     let transcript: String?
+    let recipientReply: String?
+    
+    var hasReply: Bool {
+        return recipientReply != nil && !recipientReply!.isEmpty
+    }
 }
 
 // MARK: - Conversation History

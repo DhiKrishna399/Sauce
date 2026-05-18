@@ -292,7 +292,7 @@ app.post("/test/simulate-call", async (req: Request, res: Response) => {
   });
 });
 
-// Test: Get mock status with progression
+// Test: Get mock status with progression (reservation call)
 app.get("/test/call-status/:callId", async (req: Request, res: Response) => {
   const requestId = (req as any).requestId;
   const callId = req.params.callId as string;
@@ -305,6 +305,7 @@ app.get("/test/call-status/:callId", async (req: Request, res: Response) => {
   let message: string;
   let transcript: string | undefined;
   let success: boolean | undefined;
+  let recipientReply: string | undefined;
 
   if (elapsed < 2000) {
     status = "queued";
@@ -326,6 +327,7 @@ app.get("/test/call-status/:callId", async (req: Request, res: Response) => {
       "Restaurant: Perfect, you're all set for 2 at 7 PM. See you then!",
       "Agent: Thank you! Goodbye.",
     ].join("\n");
+    recipientReply = "Perfect, you're all set for 2 at 7 PM. See you then!";
   }
 
   return res.json({
@@ -334,6 +336,91 @@ app.get("/test/call-status/:callId", async (req: Request, res: Response) => {
     message,
     success,
     transcript,
+    recipientReply,
+    elapsedMs: elapsed,
+    requestId,
+  });
+});
+
+// Test: Simulate a personal message call with reply
+app.post("/test/simulate-personal-call", async (req: Request, res: Response) => {
+  const requestId = (req as any).requestId;
+  
+  const { 
+    recipientName = "John",
+    phoneNumber = "+15551234567",
+    message = "Running 10 minutes late",
+    senderName = "Your friend"
+  } = req.body;
+
+  logger.info("[TEST] Simulating personal call", { requestId, recipientName });
+
+  const callId = "call_personal_" + Date.now().toString(36);
+
+  return res.json({
+    mode: "action",
+    type: "executed",
+    intent: "personal_message",
+    status: "success",
+    callId,
+    message: `[TEST MODE] Calling ${recipientName} to deliver your message...`,
+    details: {
+      recipientName,
+      phoneNumber,
+      messageContent: message,
+      senderName,
+      testMode: true,
+    },
+    requestId,
+  });
+});
+
+// Test: Get personal call status with reply
+app.get("/test/personal-call-status/:callId", async (req: Request, res: Response) => {
+  const requestId = (req as any).requestId;
+  const callId = req.params.callId as string;
+  
+  const callTimestamp = parseInt(callId.replace("call_personal_", ""), 36);
+  const elapsed = Date.now() - callTimestamp;
+  
+  let status: string;
+  let message: string;
+  let transcript: string | undefined;
+  let success: boolean | undefined;
+  let recipientReply: string | undefined;
+
+  if (elapsed < 2000) {
+    status = "queued";
+    message = "Call is queued...";
+  } else if (elapsed < 3000) {
+    status = "ringing";
+    message = "Phone is ringing...";
+  } else if (elapsed < 6000) {
+    status = "in-progress";
+    message = "Call in progress...";
+  } else {
+    status = "completed";
+    success = true;
+    message = "Message delivered! They sent a reply.";
+    transcript = [
+      "Agent: Hi John, I'm calling on behalf of your friend with a message for you.",
+      "User: Oh, okay. What's the message?",
+      "Agent: Your friend wanted me to tell you: \"Running 10 minutes late\"",
+      "User: Got it, thanks for letting me know!",
+      "Agent: Would you like me to pass any message back to your friend?",
+      "User: Just tell them I said thanks and I'll call them later.",
+      "Agent: I'll pass that along. Have a great day!",
+    ].join("\n");
+    recipientReply = "Just tell them I said thanks and I'll call them later.";
+  }
+
+  return res.json({
+    callId,
+    status,
+    message,
+    success,
+    transcript,
+    recipientReply,
     elapsedMs: elapsed,
     requestId,
   });
@@ -368,7 +455,9 @@ app.listen(PORT, () => {
   logger.info("  POST /webhook/agentmail    - AgentMail webhooks");
   logger.info("");
   logger.info("Test Endpoints:");
-  logger.info("  POST /test/simulate-call   - Simulate a call");
-  logger.info("  GET  /test/call-status/:id - Get simulated status");
+  logger.info("  POST /test/simulate-call          - Simulate a reservation call");
+  logger.info("  GET  /test/call-status/:id        - Get reservation call status");
+  logger.info("  POST /test/simulate-personal-call - Simulate a personal message call");
+  logger.info("  GET  /test/personal-call-status/:id - Get personal call status (with reply)");
   logger.info("=".repeat(50));
 });
